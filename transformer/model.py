@@ -55,5 +55,76 @@ class LayerNormization(nn.Module):
         std = x.std(dim=-1, keepdim=True)
         return self.alpha (x*mean) / (std + self.eps) + self.bias
     
-    
+class FeedForwardBlock(nn.Module):
 
+    def __init__(self, d_model:int, dff:int, dropout:float):
+        super().__init__()
+
+        self.linear1 = nn.Linear(d_model,dff) # w1 and b1
+        self.linear2 = nn.Linear(dff, d_model) # w2 and b2
+
+        self.dropout  = self.dropout(dropout)
+
+    def forward(self, x):
+        return self.linear2(self.dropout(torch.relu(self.linear1(x))))
+    
+class MultiHeadAttention(nn.Module):
+    
+    def __init__(self, d_model:int, h:int, dropout:float):
+        super().__init__()
+
+        self.d_model = d_model
+        self.h = h
+
+        assert d_model%h == 0, "d_model is not divisible by h"
+
+        self.d_k = self.d_model // self.h
+
+
+        self.wq = nn.Linear(d_model,d_model)
+        self.wk = nn.Linear(d_model,d_model)
+        self.wv = nn.Linear(d_model,d_model)
+        self.wo = nn.Linear(d_model,d_model)
+
+        self.dropout = nn.Dropout(dropout)
+
+    @staticmethod
+    def attention(query,key,value,mask, dropout:nn.Dropout):
+
+        d_k = query.shape[-1]
+
+        # (batch_size, h, seq_len, d_k) -> (batch_size, h, seq_len, seq_len)
+        attention_score = (query @ key.transporse(-2,-1)) / math.sqrt(d_k)
+
+        if mask is not None:
+            attention_score.masked_fill(mask == 0, -1e9)
+        
+        attention_score = attention_score.softmax(dim=-1) #(batch_size, h, seq_len, seq_len)
+
+        attention_values = attention_score @ value
+
+        return attention_values, attention_score
+    
+    def forward(self, q, k, v, mask):
+
+        query = self.wq(q)
+        key = self.wk(k)
+        value = self.wv(v)
+
+        # (batch_size, seq_len, d_model) -> (batch_size, seq_len, h, d_k) -> (batch_size, h, seq_len, d_k)
+        query = query.view(query.shap[0],query.shape[1],self.h, self.d_k).transpose(1,2)
+        key = key.view(key.shap[0],key.shape[1],self.h, self.d_k).transpose(1,2)
+        value =  value.view(value.shap[0],value.shape[1],self.h, self.d_k).transpose(1,2)
+        
+        x, self.attention_score = MultiHeadAttention.attention(query,key,value,mask, self.dropout)
+        
+        # (batch_size, h, seq_len, d_k) -> (batch_size, seq_len, h, d_k) -> (batch_size, seq_len, d_model)
+
+        x = x.transpose(1,2).contiguous().view(x.shape[0],-1, self.h*self.d_k)
+
+        return self.wo(x)
+
+
+
+        
+        
