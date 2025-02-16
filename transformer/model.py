@@ -123,8 +123,43 @@ class MultiHeadAttention(nn.Module):
         x = x.transpose(1,2).contiguous().view(x.shape[0],-1, self.h*self.d_k)
 
         return self.wo(x)
+    
+class ResidualConnection(nn.Module):
+
+    def __init__(self, dropout: float):
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
+        self.layer_norm = LayerNormization()
+    
+    def forward(self, x, sub_layer):
+        return x + self.dropout(sub_layer(self.layer_norm(x)))
+
+class EncoderBlock(nn.Module):
+    def __init__(self, self_attention_layer: MultiHeadAttention, feed_forward_layer:FeedForwardBlock, dropout:float ):
+        super().__init__()
+
+        self.self_attention_layer = self_attention_layer
+        self.feed_forward_layer = feed_forward_layer
+        self.residual_layers = nn.ModuleList([ResidualConnection(dropout) for _ in range(2)])
+
+    # src_mask required to avoid interaction of padding tokens during attn
+    def forward(self, x, src_mask):
+
+        x = self.residual_layers[0](x, lambda x: self.self_attention_layer(x,x,x,src_mask))
+        x = self.residual_layers[1](x, self.feed_forward_layer)
+        return x
+
+class Encoder(nn.Module):
+    def __init__(self, layers: nn.ModuleList ):
+        super().__init__()
+        self.layers = layers
+        self.norm = LayerNormization()
+    
+    def forward(self,x, mask):
+        for layer in self.layers:
+            x  = layer(x, mask)
+        return self.norm(x)
 
 
 
-        
-        
+
