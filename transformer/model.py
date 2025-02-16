@@ -229,6 +229,38 @@ class Transformer(nn.Module):
 
 ## Building Transformer based on the given hyper-paramters
 
+def build_transformer(src_vocab_size, tgt_vocab_size, src_seq_len, tgt_seq_len, d_model =512, N =6, h=8, d_ff = 2048,dropout=0.1):
 
+    src_embed = InputEmbedding(d_model,src_vocab_size)
+    tgt_embed = InputEmbedding(d_model, tgt_vocab_size)
 
+    src_pos_layer = PositionalEncoding(d_model,src_seq_len)
+    tgt_pos_layer = PositionalEncoding(d_model, tgt_seq_len)
+
+    encoder_blocks = []
+
+    for _ in range(N):
+        self_attention_block = MultiHeadAttention(d_model,h,dropout)
+        feed_forward_block = FeedForwardBlock(d_model,d_ff, dropout)
+        encoder_blocks.append(EncoderBlock(self_attention_block, feed_forward_block, dropout))
+    
+    decoder_blocks = []
+
+    for _ in range(N):
+        self_attention_block = MultiHeadAttention(d_model,h,dropout)
+        cross_attention_block = MultiHeadAttention(d_model,h,dropout)
         
+        feed_forward_block = FeedForwardBlock(d_model,d_ff, dropout)
+        decoder_blocks.append(DecoderBlock(self_attention_block,cross_attention_block,feed_forward_block,dropout))
+
+    encoder = Encoder(nn.ModuleList(encoder_blocks))
+    decoder = Decoder(nn.ModuleList(decoder_blocks))
+    proj_layer = ProjectionLayer(d_model, tgt_vocab_size)
+
+    transformer =  Transformer(encoder,decoder,src_embed,tgt_embed,src_pos_layer,tgt_pos_layer, proj_layer)
+
+    for p in transformer.parameters():
+        if p.dim() > 1:
+            nn.init.xavier_uniform_(p)
+    
+    return transformer
