@@ -14,11 +14,12 @@ def get_config():
         "preload" : None,
         "tokenizer_file": "tokenizer_{0}.json",
         "experiment_name": "runs/tmodel",
-        "num_layers": 4,
+        "num_layers": 2,
         "num_heads": 8,
-        "d_ff": 2048//2,
+        "d_ff": 2048//4,
         "dropout": 0.1,
-        "debug": True
+        "debug": False,
+        "run_validation_nums":1
     }
 
 def get_weights_file_path(config, epoch:str):

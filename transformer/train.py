@@ -20,6 +20,9 @@ from config import get_config, get_weights_file_path
 from torch.utils.tensorboard import SummaryWriter
 
 from tqdm import tqdm
+import time
+
+from dataset import causal_mask
 
 def get_or_build_tokenizer(config, ds, lang):
     tokenizer_path = Path(config["tokenizer_file"].format(lang))
@@ -76,6 +79,63 @@ def get_model(config, src_vocab_size, tgt_vocab_size):
     d_ff=config["d_ff"],h=config["num_heads"],dropout=config["dropout"],
     d_model=config["d_model"])
 
+
+def greedy_decode(model, encoder_input, encoder_mask, tgt_tokenizer, max_len, device):
+
+    sos_token = torch.tensor(tgt_tokenizer.token_to_id("[SOS]"), dtype=torch.int64)
+    eos_token = torch.tensor(tgt_tokenizer.token_to_id("[EOS]"), dtype=torch.int64)
+
+    encoder_output = model.encode(encoder_input, encoder_mask)
+    decoder_input = torch.empty(1, 1).fill_(sos_token).type_as(encoder_input).to(device)
+
+    while True:
+        if decoder_input.size(1) == max_len:
+            break
+
+        decoder_mask = causal_mask(decoder_input.size(1)).type_as(encoder_mask).to(device)
+
+        decoder_output = model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask)
+
+        prob = model.project(decoder_output[:,-1])
+
+        next_token = torch.argmax(prob, dim=-1).item()
+
+        decoder_input = torch.cat([
+            decoder_input,
+            torch.empty(1,1).type_as(encoder_input).fill_(next_token).to(device)
+        ],dim=1)
+
+        if next_token == eos_token:
+            break
+
+    return decoder_input.squeeze(0)
+
+# validatio loop
+
+def run_validation(model,val_dataloader,tgt_tokenizer, print_msg, max_len, device):
+    model.eval()
+    console_window = 80
+
+    with torch.no_grad():
+        for batch in val_dataloader:
+            encoder_input = batch["encoder_input"].to(device)
+            encoder_mask = batch["encoder_mask"].to(device)
+
+            src_txt = batch["src_txt"][0]
+            tgt_txt = batch["tgt_txt"][0]
+
+            assert encoder_input.size(0)  == 1, "Validation batch size should be 1"
+
+            model.eval()
+
+            model_output_ids = greedy_decode(model, encoder_input, encoder_mask, tgt_tokenizer,max_len, device)
+            model_output_txt = tgt_tokenizer.decode(model_output_ids.detach().cpu().numpy())
+
+            print_msg('-'*console_window)
+            print_msg(f"{f'SOURCE: ':>12}{src_txt}")
+            print_msg(f"{f'TARGET: ':>12}{tgt_txt}")
+            print_msg(f"{f'PREDICTED: ':>12}{model_output_txt}")
+
 # training loop
 
 def train_model(config):
@@ -113,24 +173,24 @@ def train_model(config):
     loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer_src.token_to_id("[PAD]"), label_smoothing=0.1).to(device)
 
     for epoch in range(initial_epoch, config["num_epochs"]):
-        model.train()
+        start_time = time.time()
         batch_iterator = tqdm(train_dataloader, desc=f"Processing epooch {epoch :02d}")
         for batch in batch_iterator:
+            model.train()
             encoder_input = batch["encoder_input"].to(device) # (batch_size, seq_len)
             decoder_input = batch["decoder_input"].to(device) # (batch_size, seq_len)
             encoder_mask = batch["encoder_mask"].to(device) # (batch_size, 1,1, seq_len)
             decoder_mask = batch["decoder_mask"].to(device) # (batch_size, 1, seq_len, seq_len)
             labels = batch["labels"].to(device) # (batch_size, seq_len)
 
-            with torch.amp.autocast(device_type="mps", dtype=torch.bfloat16):
-                encoder_output = model.encode(encoder_input, encoder_mask) # (batch_size, seq_len, d_model)
-                decoder_output = model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask) # (batch_size, seq_len, d_model)
-                logits = model.project(decoder_output) # (batch_size, seq_len, vocab_size)
+            encoder_output = model.encode(encoder_input, encoder_mask) # (batch_size, seq_len, d_model)
+            decoder_output = model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask) # (batch_size, seq_len, d_model)
+            logits = model.project(decoder_output) # (batch_size, seq_len, vocab_size)
 
-                # logits.view(-1, tokenizer_tgt.get_vocab_size() -> (batch_size * seq_len, vocab_size)
-                # labels.view(-1) -> (batch_size * seq_len)
+            # logits.view(-1, tokenizer_tgt.get_vocab_size() -> (batch_size * seq_len, vocab_size)
+            # labels.view(-1) -> (batch_size * seq_len)
 
-                loss = loss_fn(logits.view(-1, tokenizer_tgt.get_vocab_size()), labels.view(-1))
+            loss = loss_fn(logits.view(-1, tokenizer_tgt.get_vocab_size()), labels.view(-1))
             
             #log loss
             batch_iterator.set_postfix({"loss": f"{loss.item():6.3f}"})
@@ -145,7 +205,12 @@ def train_model(config):
             global_step += 1
 
             if config["debug"] and global_step > 10:
+                # add time taken till now in seconds to print on the terminal
+                end_time = time.time() - start_time
+                print(f"Time taken: {end_time:.2f} seconds")
                 break
+            if global_step%config["run_validation_nums"]==0:
+                run_validation(model,val_dataloader, tokenizer_tgt, lambda msg: batch_iterator.write(msg), config["seq_len"], device)
 
         # save the model
         model_file_path = get_weights_file_path(config, str(epoch))
