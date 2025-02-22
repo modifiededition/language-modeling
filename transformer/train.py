@@ -11,6 +11,10 @@ from torch.utils.data import random_split,DataLoader
 
 from pathlib import Path
 
+from dataset import BilingualDataset
+
+from model import build_transformer
+
 def get_or_build_tokenizer(config, ds, lang):
     tokenizer_path = Path(config["tokenizer_file"].format(lang))
     if not Path.exists(tokenizer_path):
@@ -39,4 +43,28 @@ def get_ds(config):
     val_ds_size  = len(ds_raw) - train_ds_size
     train_ds_raw, val_ds_raw = random_split(ds_raw, [train_ds_size, val_ds_size])
 
+    train_ds = BilingualDataset(train_ds_raw, tokenizer_src, tokenizer_tgt, config["lang_src"], config["lang_tgt"], config["seq_len"])
+    val_ds = BilingualDataset(val_ds_raw, tokenizer_src, tokenizer_tgt, config["lang_src"], config["lang_tgt"], config["seq_len"])
+
+    max_lan_src = 0
+    max_lan_tgt = 0
+
+    for item in ds_raw:
+        src_ids = tokenizer_src.encode(item["translation"][config["lang_src"]])
+        tgt_ids = tokenizer_src.encode(item["translation"][config["lang_tgt"]])
+        max_lan_src = max(max_lan_src , len(src_ids))
+        max_lan_tgt = max(max_lan_tgt, len(tgt_ids))
     
+    print(f"Max length of the src sentence: {max_lan_src}")
+    print(f"Max length of the tgt sentence: {max_lan_tgt}")
+
+    train_dataloader = DataLoader(train_ds, batch_size= config["batch_size"], shuffle=True)
+    val_dataloader = DataLoader(val_ds, batch_size=1, shuffle=True)
+
+    return train_dataloader, val_dataloader, tokenizer_src, tokenizer_tgt
+
+def get_model(config, src_vocab_size, tgt_vocab_size):
+
+    return build_transformer(src_vocab_size=src_vocab_size, tgt_vocab_size=tgt_vocab_size, 
+    src_seq_len= config["src_len"], tgt_seq_len= config["tgt_len"],
+    d_model=config["d_model"])
