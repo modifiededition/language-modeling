@@ -37,7 +37,7 @@ class PositionalEncoding(nn.Module):
         self.register_buffer("pe",pe)
     
     def forward(self, x):
-        x = x + self.pe[:, x.shape[1], :].requires_grad_(False)
+        x = x + self.pe[:, :x.shape[1], :].requires_grad_(False)
         return self.dropout(x)
 
 class LayerNormization(nn.Module):
@@ -53,7 +53,7 @@ class LayerNormization(nn.Module):
     def forward(self, x):
         mean = x.mean(dim=-1,keepdim=True)
         std = x.std(dim=-1, keepdim=True)
-        return self.alpha * (x - mean) / (std + self.eps) + self.bias
+        return self.alpha * (x - mean) / (std + self.eps) + self.beta
     
 class FeedForwardBlock(nn.Module):
 
@@ -63,7 +63,7 @@ class FeedForwardBlock(nn.Module):
         self.linear1 = nn.Linear(d_model,dff) # w1 and b1
         self.linear2 = nn.Linear(dff, d_model) # w2 and b2
 
-        self.dropout  = self.dropout(dropout)
+        self.dropout  = nn.Dropout(dropout)
 
     def forward(self, x):
         return self.linear2(self.dropout(torch.relu(self.linear1(x))))
@@ -94,12 +94,15 @@ class MultiHeadAttention(nn.Module):
         d_k = query.shape[-1]
 
         # (batch_size, h, seq_len, d_k) -> (batch_size, h, seq_len, seq_len)
-        attention_score = (query @ key.transporse(-2,-1)) / math.sqrt(d_k)
+        attention_score = (query @ key.transpose(-2,-1)) / math.sqrt(d_k)
 
         if mask is not None:
             attention_score.masked_fill(mask == 0, -1e9)
         
         attention_score = attention_score.softmax(dim=-1) #(batch_size, h, seq_len, seq_len)
+
+        if dropout is not None:
+            attention_score = dropout(attention_score)
 
         attention_values = attention_score @ value
 
@@ -112,9 +115,9 @@ class MultiHeadAttention(nn.Module):
         value = self.wv(v)
 
         # (batch_size, seq_len, d_model) -> (batch_size, seq_len, h, d_k) -> (batch_size, h, seq_len, d_k)
-        query = query.view(query.shap[0],query.shape[1],self.h, self.d_k).transpose(1,2)
-        key = key.view(key.shap[0],key.shape[1],self.h, self.d_k).transpose(1,2)
-        value =  value.view(value.shap[0],value.shape[1],self.h, self.d_k).transpose(1,2)
+        query = query.view(query.shape[0],query.shape[1],self.h, self.d_k).transpose(1,2)
+        key = key.view(key.shape[0],key.shape[1],self.h, self.d_k).transpose(1,2)
+        value =  value.view(value.shape[0],value.shape[1],self.h, self.d_k).transpose(1,2)
         
         x, self.attention_score = MultiHeadAttention.attention(query,key,value,mask, self.dropout)
         
@@ -183,6 +186,7 @@ class Decoder(nn.Module):
     def __init__(self, layers: nn.ModuleList):
         super().__init__()
         self.norm = LayerNormization()
+        self.layers = layers
 
     def forward(self,x,encoder_output,src_mask,tgt_mask):
         for layer in self.layers:
@@ -215,13 +219,13 @@ class Transformer(nn.Module):
 
         src = self.src_embed(src)
         src = self.src_pos(src)
-        return self.encode(src,src_mask)
+        return self.encoder(src,src_mask)
 
-    def decoder(self, encoder_output, src_mask, tgt, tgt_mask):
+    def decode(self, encoder_output, src_mask, tgt, tgt_mask):
 
         tgt = self.tgt_embed(tgt)
         tgt = self.tgt_pos(tgt)
-        return self.decoder(encoder_output,src_mask,tgt,tgt_mask)
+        return self.decoder(tgt, encoder_output,src_mask,tgt_mask)
 
     def project(self,x):
         return self.projection_layer(x)
@@ -234,8 +238,8 @@ def build_transformer(src_vocab_size, tgt_vocab_size, src_seq_len, tgt_seq_len, 
     src_embed = InputEmbedding(d_model,src_vocab_size)
     tgt_embed = InputEmbedding(d_model, tgt_vocab_size)
 
-    src_pos_layer = PositionalEncoding(d_model,src_seq_len)
-    tgt_pos_layer = PositionalEncoding(d_model, tgt_seq_len)
+    src_pos_layer = PositionalEncoding(d_model,src_seq_len,dropout)
+    tgt_pos_layer = PositionalEncoding(d_model, tgt_seq_len, dropout)
 
     encoder_blocks = []
 

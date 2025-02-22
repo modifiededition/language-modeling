@@ -13,9 +13,9 @@ class BilingualDataset(Dataset):
 
         self.seq_len = seq_len
 
-        self.eos_token = torch.tensor(tokenizer_src.token_to_id(["[EOS]"]), dtype=torch.int64) 
-        self.sos_token = torch.tensor(tokenizer_src.token_to_id(["[SOS]"]), dtype=torch.int64) 
-        self.pad_token = torch.tensor(tokenizer_src.token_to_id(["[PAD]"]), dtype=torch.int64) 
+        self.eos_token = torch.tensor(tokenizer_src.token_to_id("[EOS]"), dtype=torch.int64) 
+        self.sos_token = torch.tensor(tokenizer_src.token_to_id("[SOS]"), dtype=torch.int64) 
+        self.pad_token = torch.tensor(tokenizer_src.token_to_id("[PAD]"), dtype=torch.int64) 
     
     def __len__(self):
         return len(self.ds)
@@ -37,23 +37,23 @@ class BilingualDataset(Dataset):
             raise Exception("Seq length too small")
         
         encoder_input = torch.cat([
-            self.sos_token,
+            self.sos_token.unsqueeze(0),
             torch.tensor(src_tokens,dtype = torch.int64),
-            self.eos_token,
+            self.eos_token.unsqueeze(0),
             torch.tensor([self.pad_token]*src_pad_tokens_len,dtype = torch.int64)
-        ])
+        ], dim=0)
 
         decoder_input = torch.cat([
-            self.sos_token,
+            self.sos_token.unsqueeze(0),
             torch.tensor(tgt_tokens, dtype=torch.int64),
             torch.tensor([self.pad_token]*tgt_pad_tokens_len,dtype = torch.int64)
-        ])
+        ], dim = 0)
 
         labels = torch.cat([
             torch.tensor(tgt_tokens, dtype=torch.int64),
-            self.eos_token,
+            self.eos_token.unsqueeze(0),
             torch.tensor([self.pad_token]*tgt_pad_tokens_len,dtype = torch.int64)
-        ])
+        ], dim=0)
 
         assert encoder_input.size(0) == self.seq_len
         assert decoder_input.size(0) == self.seq_len
