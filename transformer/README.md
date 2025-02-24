@@ -60,7 +60,7 @@ This project involves training a vanilla transformer architecture on a Mac Mini 
 - **Training Time**: Approximately 42 minutes per epoch.
 - **GPU Usage**: Over 90%
 - **Memory Usage**: Approximately 7.7 GB
-- **Observation**: A model with about 40 to 45M parameters can be trained on this system without significant slowness.
+- **Observation**: A model with about 40 to 47M parameters can be trained on this system without significant slowness.
 
 ### System Monitoring
 
