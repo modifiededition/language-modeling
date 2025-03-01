@@ -27,6 +27,44 @@ class ModelArgs:
 
     device: str = None
 
+def precompute_theta_pos_frequencies(head_dim : int, seq_len:int, device:str, theta_constant = 10000.0):
+
+    # since euger formula can be gneralized to even number of dimensions
+    assert head_dim % 2 == 0, "head_dim must be divisible by 2"
+    # create theta tensor (head_dim//2)
+    theta_numerator = torch.arange(0,head_dim).float()
+    theta = 1.0 / (theta_constant ** (theta_numerator / head_dim)).to(device)
+    # create pos(m) tensor (seq_len)
+    m = torch.arange(seq_len, device=device)
+
+    # mutiple theta vector to each position(m) of vector sequence
+    # (seq_len, head_dim//2)
+    freqs = torch.outer(m, theta).float()
+
+    # convert it into the complex form using: c = R* exp(i*m*theta), where R=1
+    # c = exp(i*m*theta) = cos(m*theta) + i*sin(m*theta)
+    freqs_complex = torch.polar(torch.ones_like(freqs), freqs)
+    return freqs_complex
+
+def apply_rotary_embeddings(x: torch.tensor, freqs_complex: torch.tensor, device: str):
+    # here freq_s_complex is tensor for the given position x
+    # first we convert embedding of x into complex form
+    # (batch_size, seq_len, h, head_dim) -> (batch_size, seq_len, h, head_dim//2,2)
+    pair_wise_x = x.float().reshape(*x.shape[:-1],-1,2)
+    # (batch_size, seq_len, h, head_dim//2,2) -> (batch_size, seq_len, h, head_dim//2)
+    x_complex = torch.view_as_complex(pair_wise_x)
+    #(seq_lem, head_dim//2) -> (1, seq_len, 1, head_dim//2)
+    freqs_complex = freqs_complex.unsqueeze(0).unsqueeze(2)
+    # (batch_size, seq_len, h, head_dim//2) * (1, seq_len, 1, head_dim//2) -> (batch_size, seq_len, h, head_dim//2)
+    rotated = x_complex * freqs_complex
+    # convert back the complex form to real form
+    # (batch_size, seq_len, h, head_dim//2) -> (batch_size, seq_len, h, head_dim//2, 2)
+    x_out = torch.view_as_real(rotated)
+    # flatten the last two dimensions
+    # (batch_size, seq_len, h, head_dim//2, 2) -> (batch_size, seq_len, h, head_dim)
+    x_out = x_out.reshape(*x.shape)
+    return x_out
+
 class Transformer(nn.Module):
 
     def __init__(self, args: ModelArgs):
