@@ -63,7 +63,7 @@ def apply_rotary_embeddings(x: torch.tensor, freqs_complex: torch.tensor, device
     # flatten the last two dimensions
     # (batch_size, seq_len, h, head_dim//2, 2) -> (batch_size, seq_len, h, head_dim)
     x_out = x_out.reshape(*x.shape)
-    return x_out
+    return x_out.type_as(x).to(device)
 
 class Transformer(nn.Module):
 
