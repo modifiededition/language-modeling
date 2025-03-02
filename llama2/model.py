@@ -65,6 +65,50 @@ def apply_rotary_embeddings(x: torch.tensor, freqs_complex: torch.tensor, device
     x_out = x_out.reshape(*x.shape)
     return x_out.type_as(x).to(device)
 
+class RMSNorm(nn.Module):
+    def __init__(self, dim:int, eps:float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        # gamma parameter
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def _norm(self, x: torch.tensor):
+        # (batch_size, seq_len, dim) -> (batch_size, seq_len, 1) = (batch_size, seq_len, dim)
+        # rsqrt = 1/sqrt
+        return x*torch.rsqrt(x.pow(2).mean(dim=-1,keepdim = True) + self.eps)
+    
+    def forward(self, x: torch.tensor):
+        # (dim) * (batch_size, seq_lem, dim) -> (batch_size, seq_len, dim)
+        return self.weight * self._norm(x.float()).type_as(x)
+    
+class EncoderBlock(nn.Module):
+    def __init__(self, args: ModelArgs):
+        super().__init__()
+
+        self.n_heads = args.n_heads
+        self.dim = args.dim
+
+        self.head_dim = args.dim // args.n_heads
+
+        self.attention = SelfAttention(args)
+        self.feed_forward = FeedForward(args)
+
+        # rms norm before attention
+        self.attention_norm = RMSNorm(args.dim)
+
+        # rms norm before feed forward
+        self.ffn_norm = RMSNorm(args.dim)
+    
+    def forward(self, x: torch.tensor, start_pos:int, freqs_complex: torch.tensor):
+        # here x/h is added first to make the skip connection
+        # (batch_size, seq_len, dim) + (batch_size, seq_len, dim) = (batch_size, seq_len, dim)
+        h  = x + self.attention.forward(self.attention_norm(x), start_pos, freqs_complex)
+        out = h + self.feed_forward(self.ffn_norm(h))
+        return out
+
+
+    
+
 class Transformer(nn.Module):
 
     def __init__(self, args: ModelArgs):
