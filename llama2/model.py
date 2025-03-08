@@ -21,7 +21,7 @@ class ModelArgs:
     vocab_size: int = -1 # This will be set when we load the tokenizer
     multiple_of: int = 256
     ffn_dim_multipler: Optional[float] = None
-    norm_eps = 1e-6
+    norm_eps:float = 1e-6
 
     # Needed for KV cache
     max_batch_size: int = 32
@@ -31,10 +31,10 @@ class ModelArgs:
 
 def precompute_theta_pos_frequencies(head_dim : int, seq_len:int, device:str, theta_constant = 10000.0):
 
-    # since euger formula can be gneralized to even number of dimensions
+    # since euger formula can be generalized to even number of dimensions
     assert head_dim % 2 == 0, "head_dim must be divisible by 2"
     # create theta tensor (head_dim//2)
-    theta_numerator = torch.arange(0,head_dim).float()
+    theta_numerator = torch.arange(0,head_dim, 2).float()
     theta = 1.0 / (theta_constant ** (theta_numerator / head_dim)).to(device)
     # create pos(m) tensor (seq_len)
     m = torch.arange(seq_len, device=device)
@@ -51,11 +51,12 @@ def precompute_theta_pos_frequencies(head_dim : int, seq_len:int, device:str, th
 def apply_rotary_embeddings(x: torch.tensor, freqs_complex: torch.tensor, device: str):
     # here freq_s_complex is tensor for the given position x
     # first we convert embedding of x into complex form
+    # and for that first we need to ungroup it
     # (batch_size, seq_len, h, head_dim) -> (batch_size, seq_len, h, head_dim//2,2)
     pair_wise_x = x.float().reshape(*x.shape[:-1],-1,2)
     # (batch_size, seq_len, h, head_dim//2,2) -> (batch_size, seq_len, h, head_dim//2)
     x_complex = torch.view_as_complex(pair_wise_x)
-    #(seq_lem, head_dim//2) -> (1, seq_len, 1, head_dim//2)
+    #(seq_len, head_dim//2) -> (1, seq_len, 1, head_dim//2)
     freqs_complex = freqs_complex.unsqueeze(0).unsqueeze(2)
     # (batch_size, seq_len, h, head_dim//2) * (1, seq_len, 1, head_dim//2) -> (batch_size, seq_len, h, head_dim//2)
     rotated = x_complex * freqs_complex
@@ -120,7 +121,7 @@ class SelfAttention(nn.Module):
     def __init__(self, args:ModelArgs):
         super().__init__()
 
-        self.n_kv_heads = self.n_heads if self.n_kv_heads is None else self.n_kv_heads
+        self.n_kv_heads = args.n_heads if args.n_kv_heads is None else self.n_kv_heads
         self.n_heads_q = args.n_heads
         
         # indicates how many times k and v heads to repeat to match the query heads
@@ -137,7 +138,7 @@ class SelfAttention(nn.Module):
         self.v_cache = torch.zeros((args.max_batch_size, args.max_seq_len, self.n_kv_heads, self.head_dim ))
         
     def forward(self, x: torch.tensor, start_pos: int, freqs_complex: torch.tensor):
-        batch_size, seq_len, _  = x.shape
+        batch_size, seq_len, _  = x.shape # (B, 1, Dim)
         # Since, seq_len is 1
         # (batch_size, 1, head_dim ) -> (batch_size, 1, num_heads_q * head_dim)
         xq = self.wq(x)
@@ -227,9 +228,11 @@ class Transformer(nn.Module):
         super().__init__()
 
         self.args = args
+        assert args.vocab_size != -1, "Vocab size must be set"
+
         self.n_layers = args.n_layers
         self.vocab_size = args.vocab_size
-        self.tok_embedding = nn.Embedding(self.vlocab_size, self.dim)
+        self.tok_embeddings = nn.Embedding(self.vocab_size, args.dim)
 
         self.norm = RMSNorm(args.dim, eps = args.norm_eps)
 
@@ -237,7 +240,7 @@ class Transformer(nn.Module):
         for _ in range(self.n_layers):
             self.layers.append(EncoderBlock(args))
 
-        self.output = nn.Linear(args.dim, self.vocab_size)
+        self.output = nn.Linear(args.dim, self.vocab_size, bias=False)
 
         self.freq_complex = precompute_theta_pos_frequencies(self.args.dim//args.n_heads, self.args.max_seq_len*2, device = self.args.device)
             
