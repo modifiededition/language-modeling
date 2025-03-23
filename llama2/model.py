@@ -121,12 +121,12 @@ class SelfAttention(nn.Module):
     def __init__(self, args:ModelArgs):
         super().__init__()
 
-        self.n_kv_heads = args.n_heads if args.n_kv_heads is None else self.n_kv_heads
+        self.n_kv_heads = args.n_heads if args.n_kv_heads is None else args.n_kv_heads
         self.n_heads_q = args.n_heads
         
         # indicates how many times k and v heads to repeat to match the query heads
         self.n_rep = self.n_heads_q // self.n_kv_heads
-
+        
         self.head_dim = args.dim // args.n_heads
 
         self.wq = nn.Linear(args.dim, self.n_heads_q * self.head_dim, bias=False)
@@ -134,32 +134,32 @@ class SelfAttention(nn.Module):
         self.wv = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias = False)
         self.wo = nn.Linear(args.n_heads * self.head_dim,  args.dim, bias = False)
 
-        self.k_cache = torch.zeros((args.max_batch_size, args.max_seq_len, self.n_kv_heads, self.head_dim ))
-        self.v_cache = torch.zeros((args.max_batch_size, args.max_seq_len, self.n_kv_heads, self.head_dim ))
+        self.k_cache = torch.zeros((args.max_batch_size, args.max_seq_len, self.n_kv_heads, self.head_dim ),device=args.device)
+        self.v_cache = torch.zeros((args.max_batch_size, args.max_seq_len, self.n_kv_heads, self.head_dim ),device=args.device)
         
     def forward(self, x: torch.tensor, start_pos: int, freqs_complex: torch.tensor):
         batch_size, seq_len, _  = x.shape # (B, 1, Dim)
         # Since, seq_len is 1
-        # (batch_size, 1, head_dim ) -> (batch_size, 1, num_heads_q * head_dim)
+        # (batch_size, 1, dim ) -> (batch_size, 1, num_heads_q * head_dim)
         xq = self.wq(x)
-        # (batch_size, 1, head_dim ) -> (batch_size, 1, num_kv_heads * head_dim)
+        # (batch_size, 1, dim ) -> (batch_size, 1, num_kv_heads * head_dim)
         xk = self.wk(x)
-        # (batch_size, 1, head_dim ) -> (batch_size, 1, num_kv_heads * head_dim)
+        # (batch_size, 1, dim ) -> (batch_size, 1, num_kv_heads * head_dim)
         xv = self.wv(x)
 
         # Split them among heads before applying attention
 
         # (batch_size, 1, num_heads_q * head_dim) -> (batch_size, 1, num_heads_q, head_dim) 
-        xq = xq.view(batch_size,seq_len, self.n_heads_q, self.dim)
+        xq = xq.view(batch_size,seq_len, self.n_heads_q, self.head_dim)
         # (batch_size, 1, num_kv_heads * head_dim) -> (batch_size, 1, num_kv_heads, head_dim) 
-        xk = xk.view(batch_size,seq_len, self.n_kv_heads, self.dim)
+        xk = xk.view(batch_size,seq_len, self.n_kv_heads, self.head_dim)
         # (batch_size, 1, num_kv_heads * head_dim) -> (batch_size, 1, num_kv_heads, head_dim) 
-        xv = xv.view(batch_size,seq_len, self.n_kv_heads, self.dim)
+        xv = xv.view(batch_size,seq_len, self.n_kv_heads, self.head_dim)
 
         # apply rototary positional encoding to query and keys
         # it does not change the shape of the tensors
-        xq = apply_rotary_embeddings(xq, freqs_complex)
-        xk = apply_rotary_embeddings(xk, freqs_complex)
+        xq = apply_rotary_embeddings(xq, freqs_complex, x.device)
+        xk = apply_rotary_embeddings(xk, freqs_complex, x.device)
 
         # replace the cache of keys and values with the latest token
         self.k_cache[:batch_size,start_pos: start_pos + seq_len] = xk
@@ -185,15 +185,14 @@ class SelfAttention(nn.Module):
 
         # calculate attention
         # (batch_size, num_heads_q, 1, head_dim) * (batch_size, num_heads_q, head_dim, kv_seq_len) ->  (batch_size, num_heads_q, 1, kv_seq_len)
-        scores = torch.matmul(xq, keys.transpose(2,3)) / math.sqrt(self.dim)
+        scores = torch.matmul(xq, keys.transpose(2,3)) / math.sqrt(self.head_dim)
         scores = F.softmax(scores.float(), dim = -1).type_as(x)     
 
         # (batch_size,num_heads_q, 1, seq_len_kv) * (batch_size , num_heads_q, seq_len_kv, head_dim) - >  (batch_size , num_heads_q, 1, head_dim)
         out = torch.matmul(scores, values)
 
         # (batch_size, num_heads_q, 1, head_dim) -> (batch_size, 1, num_heads_q, head_dim) -> (batch_size, 1, dim )
-        out = out.view(1,2).contiguous().view(batch_size,seq_len, -1)
-
+        out = (out.transpose(1, 2).contiguous().view(batch_size, seq_len, -1))
         # (batch_size, 1, dim) -> (batch_size, 1, dim)
         return self.wo(out)
     
@@ -250,7 +249,7 @@ class Transformer(nn.Module):
         assert seq_len == 1, "Only one token at a time can be processed due to KV cache"
 
         # (batch_size, seq_len) -> (batch_size, seq_len, dim)
-        h = self.tok_embedding(tensor)
+        h = self.tok_embeddings(tensor)
 
         # get rotatory position. Retrieve the pairs (m, theta) corresponding to the positions [start_pos, start_pos+seq_len] 
         freqs_complex  = self.freq_complex[start_pos:start_pos+seq_len]

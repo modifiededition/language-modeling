@@ -9,3 +9,10 @@ __pycache__/
 # IPython
 profile_default/
 ipython_config.py
+
+# Llama-2-7b directory checkpoint
+Llama-2-7b/
+
+# macOS system files
+.DS_Store
+**/.DS_Store
